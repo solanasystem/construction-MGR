@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: files (写真・書類) v20260906A -->
+<!-- BUILD: files (写真・書類) v20260906B -->
 <html lang="ja">
 <head>
 <meta charset="utf-8">
@@ -59,7 +59,19 @@
   .drow .body{ display:flex; align-items:center; gap:12px; }
 
   .up{ background:var(--card); border:1px dashed var(--rule); border-radius:2px;
-       padding:14px; margin-bottom:14px; }
+       padding:14px; margin-bottom:14px; transition:background .12s ease, border-color .12s ease; }
+  .up.dragging{ border-color:var(--ink); border-style:solid; background:#EEF4FB; box-shadow:var(--shadow-2); }
+  .drophint{ font-size:12.5px; color:var(--sub); text-align:center; padding:9px 10px; margin-bottom:11px;
+             border:1px dashed var(--rule); border-radius:var(--radius-sm); background:#FAFBF9; line-height:1.6; }
+  .drophint b{ color:var(--ink-2); }
+  .up.dragging .drophint{ border-color:var(--ink); border-style:solid; color:var(--ink); background:#E3EDF7; }
+  /* ページ全体がドロップ受け入れ中であることの帯 */
+  .dropveil{ position:fixed; inset:0; z-index:70; background:rgba(19,56,93,.10);
+             border:3px dashed var(--ink); display:none; align-items:center; justify-content:center;
+             pointer-events:none; }
+  .dropveil.on{ display:flex; }
+  .dropveil span{ background:var(--ink); color:#fff; font-family:var(--disp); font-weight:700;
+                  font-size:16px; padding:12px 22px; border-radius:var(--radius); box-shadow:var(--shadow-3); }
   .pick2{ display:flex; gap:8px; flex-wrap:wrap; }
   .pick2 .btn{ flex:1 1 150px; }
   .opt2{ display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
@@ -137,6 +149,7 @@
   <div id="msg" class="msg"></div>
 
   <div class="up" id="up" hidden>
+    <div class="drophint" id="drophint">写真・PDFを、この枠へ <b>ドラッグ＆ドロップ</b> でも取り込めます</div>
     <div class="pick2">
       <button class="btn" id="cambtn" type="button">カメラで撮る</button>
       <button class="btn ghost" id="filebtn" type="button">保存済みから選ぶ</button>
@@ -278,6 +291,8 @@
     </div>
   </div>
 </div>
+
+<div class="dropveil" id="dropveil"><span>ここにドロップして取り込む</span></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/dxf-parser@1.1.2/dist/dxf-parser.js"></script>
@@ -807,14 +822,63 @@
   $('cambtn').addEventListener('click', () => $('cam').click());
   $('filebtn').addEventListener('click', () => $('file').click());
 
-  function accept(e){
-    picked = picked.concat([...e.target.files]);
-    e.target.value = '';
-    paintPicked();
+  // 取り込めるのは写真（画像）とPDFのみ
+  function isAcceptable(f){
+    return (f.type && (f.type.startsWith('image/') || f.type === 'application/pdf'))
+        || /\.(jpe?g|png|gif|webp|heic|heif|pdf)$/i.test(f.name || '');
   }
+  // 入力・ドラッグ＆ドロップ共通の受け取り
+  function acceptFiles(fileList){
+    const all = [...fileList];
+    const arr = all.filter(isAcceptable);
+    if (!arr.length){
+      if (all.length) showMsg($('msg'), '取り込めるのは写真（画像）とPDFだけです。', 'err');
+      return;
+    }
+    if ($('up').hidden){ $('up').hidden = false; askPosition(); }
+    picked = picked.concat(arr);
+    paintPicked();
+    $('up').scrollIntoView({ behavior:'smooth', block:'start' });
+    const skipped = all.length - arr.length;
+    if (skipped) showMsg($('msg'), `${skipped}件は写真・PDF以外のため除きました。`, 'err');
+  }
+  function accept(e){ acceptFiles(e.target.files); e.target.value = ''; }
   $('u_tags').addEventListener('input', syncChips);
   $('cam').addEventListener('change', accept);
   $('file').addEventListener('change', accept);
+
+  /* ---- ドラッグ＆ドロップで取り込む（枠内でも、ページ上のどこでも受け付ける） ---- */
+  (function wireDnd(){
+    const veil = $('dropveil'), up = $('up');
+    let depth = 0;
+    const hasFiles = e => !!e.dataTransfer && Array.prototype.includes.call(e.dataTransfer.types || [], 'Files');
+    const blocked = () => $('panel').classList.contains('open');   // 詳細を開いている間は無効
+    document.addEventListener('dragenter', e => {
+      if (!hasFiles(e) || blocked()) return;
+      depth++; veil.classList.add('on');
+    });
+    document.addEventListener('dragover', e => {
+      if (!hasFiles(e) || blocked()) return;
+      e.preventDefault();
+      try { e.dataTransfer.dropEffect = 'copy'; } catch (_){}
+      up.classList.toggle('dragging', !up.hidden && up.contains(e.target));
+    });
+    document.addEventListener('dragleave', e => {
+      if (!hasFiles(e)) return;
+      depth = Math.max(0, depth - 1);
+      if (depth === 0){ veil.classList.remove('on'); up.classList.remove('dragging'); }
+    });
+    document.addEventListener('drop', e => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      depth = 0; veil.classList.remove('on'); up.classList.remove('dragging');
+      if (blocked()) return;
+      if (!projId){ showMsg($('msg'), '先に工事を選んでください。', 'err'); return; }
+      if (e.dataTransfer.files && e.dataTransfer.files.length) acceptFiles(e.dataTransfer.files);
+    });
+    // ウィンドウ外へドラッグしたまま戻らないケースの保険
+    window.addEventListener('dragend', () => { depth = 0; veil.classList.remove('on'); up.classList.remove('dragging'); });
+  })();
 
   function safeName(n){
     return n.replace(/[^\w.\-]/g, '_').slice(-80);

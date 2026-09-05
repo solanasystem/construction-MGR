@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: handover (竣工図書) v20260906A -->
+<!-- BUILD: handover (竣工図書) v20260906B -->
 <html lang="ja">
 <head>
 <meta charset="utf-8">
@@ -45,7 +45,9 @@
   .chap.none > .ch{ background:#FBF6EA; }
   .chap.dragover{ outline:2px dashed var(--safety); outline-offset:-2px; }
   .chap .items{ padding:8px; display:flex; flex-direction:column; gap:6px; min-height:20px; }
-  .chap .items:empty::after{ content:"（ここへドラッグして分類）"; color:#9AA39C; font-size:12.5px; padding:6px 4px; }
+  .chap .items:empty::after{ color:#9AA39C; font-size:12.5px; padding:6px 4px; }
+  .chap.folder .items:empty::after{ content:"ここへドラッグ／写真・PDFをドロップ（この章へ）"; }
+  .chap.pool .items:empty::after{ content:"ここへ写真・PDFをドロップで一括取り込み（未分類）"; color:#8A6400; }
 
   .row2{ display:grid; grid-template-columns:34px 52px 1fr auto; align-items:center; gap:10px;
          border:1px solid var(--rule); border-radius:var(--radius-sm); background:#fff; padding:6px 8px;
@@ -88,6 +90,13 @@
   .chap.folder.filled > .ch .cl{ color:var(--ok); }
   .chap.folder.filled > .ch .cn::after{ content:"✓"; color:var(--ok); margin-left:4px; }
   .chap.folder.empty > .ch{ opacity:.72; }
+  /* 外部ファイルのドラッグ中、章の枠を強調 */
+  .chap.fileover{ outline:3px solid var(--safety); outline-offset:-3px; background:#FBF6EA; }
+  .dropveil{ position:fixed; inset:0; z-index:70; background:rgba(19,56,93,.10);
+             border:3px dashed var(--ink); display:none; align-items:center; justify-content:center; pointer-events:none; }
+  .dropveil.on{ display:flex; }
+  .dropveil span{ background:var(--ink); color:#fff; font-family:var(--disp); font-weight:700; font-size:15px;
+                  padding:12px 22px; border-radius:var(--radius); box-shadow:var(--shadow-3); text-align:center; line-height:1.6; }
 
   /* ===== 印刷（目次・工事写真帳） ===== */
   .printdoc{ display:none; }
@@ -159,8 +168,8 @@
   <div id="body" hidden>
     <div id="progress" class="prog2"></div>
 
-    <p class="sech">仕分け（未分類の受け皿 → 各章フォルダへ）</p>
-    <p class="hint">一番上の<b>受け皿</b>にある資料を、行の <b>⠿</b> をつかんで各章の枠へドラッグすると、その章へ移り<b>受け皿から消えます</b>。受け皿が空になれば分類完了です。写真・書類の取り込みは「写真・書類」画面から。</p>
+    <p class="sech">仕分け（受け皿 ⇄ 各章フォルダ・パソコンからD&Dで取り込み）</p>
+    <p class="hint">パソコンの写真・PDFを<b>章の枠へドラッグ＆ドロップ</b>すればその章へ、<b>枠の外や受け皿</b>へ落とせば未分類として取り込めます。すでにある資料は行の <b>⠿</b> をつかんで章の枠へ動かせます（その章へ移り受け皿から消えます）。</p>
     <div id="chaps"></div>
 
     <p class="sech">目次（集まり具合）</p>
@@ -169,6 +178,8 @@
 
   <div id="emptymsg"></div>
 </div>
+
+<div class="dropveil" id="dropveil"><span>章の枠に落とすとその章へ／枠の外は「未分類（受け皿）」へ取り込み</span></div>
 
 <!-- ===== 印刷用：目次 ===== -->
 <div id="printToc" class="printdoc">
@@ -360,7 +371,7 @@
     secOrder.forEach(key => {
       const arr = map.get(key) || [];
       const isPool = key === NONE;
-      if (isPool && !arr.length) return;   // 受け皿は残っているときだけ出す
+      // 受け皿は空でも常に表示（ドラッグ＆ドロップの一括取り込み口を兼ねる）
       const label = isPool ? '未分類（受け皿）' : chapterLabel(key);
       const cn = isPool ? '' : String(HANDOVER_CHAPTERS.findIndex(c => c.key === key) + 1).padStart(2, '0');
       const cls = isPool ? 'pool' : ('folder ' + (arr.length ? 'filled' : 'empty'));
@@ -390,6 +401,85 @@
     renderChaps(map);
   }
 
+  /* ---------- 外部ファイルの取り込み（章の枠＝その章へ／枠外＝未分類へ） ---------- */
+  const hasFiles = e => !!e.dataTransfer && Array.prototype.includes.call(e.dataTransfer.types || [], 'Files');
+  function isAcceptableFile(f){
+    return (f.type && (f.type.startsWith('image/') || f.type === 'application/pdf'))
+        || /\.(jpe?g|png|gif|webp|heic|heif|pdf)$/i.test(f.name || '');
+  }
+  let uploading = false;
+  async function uploadFiles(fileList, docCategory){
+    if (!isMgr){ return; }
+    if (!projId){ showMsg($('msg'), '先に工事を選んでください。', 'err'); return; }
+    if (uploading){ return; }
+    const all = [...fileList].filter(isAcceptableFile);
+    if (!all.length){
+      if (fileList.length) showMsg($('msg'), '取り込めるのは写真（画像）とPDFだけです。', 'err');
+      return;
+    }
+    uploading = true;
+    const dc = docCategory || null;
+    const devPos = await currentPosition(6000);
+    // その章の末尾の並び順から続ける
+    let base = dc ? Math.max(0, ...files.filter(x => x.doc_category === dc).map(x => x.sort_order || 0)) : 0;
+    let ok = 0, ng = 0;
+    for (let i = 0; i < all.length; i++){
+      const f = all[i];
+      showMsg($('msg'), `取り込み中… ${i + 1} / ${all.length}（${f.name}）`, '');
+      try {
+        let origBlob = f, w = null, h = null;
+        if (f.type.startsWith('image/')){
+          const r = await shrinkImage(f, 1600, 0.80);   // 提出用（工事写真台帳の画質）
+          if (r){ origBlob = r.blob; w = r.w; h = r.h; }
+        }
+        const stamp = Date.now() + '_' + i;
+        const baseP = `${me.organization_id}/${projId}`;
+        const nm = (f.name || 'file').replace(/[^\w.\-]/g, '_').slice(-80);
+        const origPath = `${baseP}/orig/${stamp}_${nm}`;
+        const up1 = await sb.storage.from(BUCKET).upload(origPath, origBlob, { contentType: f.type || 'application/octet-stream' });
+        if (up1.error) throw up1.error;
+        let thumbPath = null;
+        const t = await makeThumb(f, 900, 0.75);
+        if (t){
+          thumbPath = `${baseP}/thumb/${stamp}_${nm}.jpg`;
+          const up2 = await sb.storage.from(BUCKET).upload(thumbPath, t, { contentType: 'image/jpeg' });
+          if (up2.error) thumbPath = null;
+        }
+        const geo = await resolveGeo(f, devPos);
+        base += 10;
+        const { error } = await sb.from('project_files').insert({
+          organization_id: me.organization_id,
+          project_id     : projId,
+          file_kind      : f.type.startsWith('image/') ? 'photo' : (f.type === 'application/pdf' ? 'document' : 'other'),
+          purpose        : 'submit',
+          storage_path   : origPath,
+          thumb_path     : thumbPath,
+          original_name  : f.name,
+          mime_type      : f.type || null,
+          byte_size      : origBlob.size,
+          width_px       : w, height_px: h,
+          doc_category   : dc,
+          sort_order     : dc ? base : 0,
+          taken_on       : (geo.at ? geo.at.slice(0, 10)
+                            : new Date(f.lastModified || Date.now()).toISOString().slice(0, 10)),
+          captured_at    : geo.at ? new Date(geo.at).toISOString() : null,
+          lat            : geo.lat, lng: geo.lng,
+          geo_source     : geo.source, geo_accuracy_m: geo.acc,
+          uploaded_by    : me.id
+        });
+        if (error) throw error;
+        ok++;
+      } catch (e){ ng++; console.error(e); }
+    }
+    uploading = false;
+    await loadFiles();
+    if (files.length){ $('body').hidden = false; $('emptymsg').innerHTML = ''; render(); }
+    showMsg($('msg'),
+      `${ok}件を${dc ? `「${chapterLabel(dc)}」へ` : '未分類（受け皿）へ'}取り込みました。` +
+      (ng ? `（${ng}件は失敗しました）` : ''),
+      ng ? 'err' : 'ok');
+  }
+
   /* ---------- ドラッグで章へ振り分け・並べ替え ---------- */
   function clearInd(){
     $('chaps').querySelectorAll('.dropbefore,.dropafter,.dragover')
@@ -405,24 +495,32 @@
       });
       row.addEventListener('dragend', () => { row.classList.remove('dragging'); clearInd(); });
       row.addEventListener('dragover', e => {
+        if (hasFiles(e)){ e.preventDefault(); return; }   // 外部ファイルは章の枠で受ける
         e.preventDefault(); clearInd();
         const r = row.getBoundingClientRect();
         row.classList.add((e.clientY - r.top) > r.height / 2 ? 'dropafter' : 'dropbefore');
       });
       row.addEventListener('drop', async e => {
         e.preventDefault(); e.stopPropagation();
+        const chap = row.closest('.chap');
+        if (hasFiles(e)){ clearInd(); chap && chap.classList.remove('fileover');
+          if (e.dataTransfer.files?.length) await uploadFiles(e.dataTransfer.files, chap ? (chap.dataset.key || '') : ''); return; }
         const r = row.getBoundingClientRect();
         const after = (e.clientY - r.top) > r.height / 2;
-        const chap = row.closest('.chap');
         clearInd();
         await doMove(draggingId, chap ? (chap.dataset.key || '') : '', row.dataset.id, after);
       });
     });
     box.querySelectorAll('.chap').forEach(sec => {
-      sec.addEventListener('dragover', e => { e.preventDefault(); sec.classList.add('dragover'); });
-      sec.addEventListener('dragleave', () => sec.classList.remove('dragover'));
+      sec.addEventListener('dragover', e => {
+        e.preventDefault();
+        sec.classList.add(hasFiles(e) ? 'fileover' : 'dragover');
+      });
+      sec.addEventListener('dragleave', () => { sec.classList.remove('dragover'); sec.classList.remove('fileover'); });
       sec.addEventListener('drop', async e => {
-        e.preventDefault(); sec.classList.remove('dragover');
+        e.preventDefault(); e.stopPropagation();
+        sec.classList.remove('dragover'); sec.classList.remove('fileover');
+        if (hasFiles(e)){ if (e.dataTransfer.files?.length) await uploadFiles(e.dataTransfer.files, sec.dataset.key || ''); return; }
         await doMove(draggingId, sec.dataset.key || '', null, false);
       });
     });
@@ -578,6 +676,23 @@
     window.addEventListener('afterprint', done);
     window.print();
   });
+
+  /* ---------- 外部ファイルのD&D（ページ全体で受け止め・枠外は未分類へ） ---------- */
+  (function wireDocDnd(){
+    const veil = $('dropveil');
+    let depth = 0;
+    document.addEventListener('dragenter', e => { if (!hasFiles(e) || !isMgr || !projId) return; depth++; veil.classList.add('on'); });
+    document.addEventListener('dragover', e => { if (!hasFiles(e) || !isMgr || !projId) return; e.preventDefault(); try { e.dataTransfer.dropEffect = 'copy'; } catch (_){} });
+    document.addEventListener('dragleave', e => { if (!hasFiles(e)) return; depth = Math.max(0, depth - 1); if (depth === 0) veil.classList.remove('on'); });
+    document.addEventListener('drop', async e => {
+      if (!hasFiles(e)) return;
+      e.preventDefault(); depth = 0; veil.classList.remove('on');
+      if (!isMgr || !projId) return;
+      // 章の枠に落ちたものは stopPropagation 済みでここへは来ない → 未分類（受け皿）へ
+      if (e.dataTransfer.files && e.dataTransfer.files.length) await uploadFiles(e.dataTransfer.files, '');
+    });
+    window.addEventListener('dragend', () => { depth = 0; veil.classList.remove('on'); });
+  })();
 
   /* ---------- 工事切り替え ---------- */
   async function selectProject(id){
