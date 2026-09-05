@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: handover (竣工図書) v20260906B -->
+<!-- BUILD: handover (竣工図書) v20260906C -->
 <html lang="ja">
 <head>
 <meta charset="utf-8">
@@ -473,7 +473,9 @@
     }
     uploading = false;
     await loadFiles();
-    if (files.length){ $('body').hidden = false; $('emptymsg').innerHTML = ''; render(); }
+    try { await applyChapterNames(files, dc || ''); } catch (_){}   // 章へ入れた分にファイル名タグ・No.を付与
+    if (files.length){ $('body').hidden = false; $('emptymsg').innerHTML = ''; }
+    render();
     showMsg($('msg'),
       `${ok}件を${dc ? `「${chapterLabel(dc)}」へ` : '未分類（受け皿）へ'}取り込みました。` +
       (ng ? `（${ng}件は失敗しました）` : ''),
@@ -532,6 +534,7 @@
     const dragged = files.find(x => x.id === draggedId);
     if (!dragged) return;
 
+    const sourceKey = dragged.doc_category || '';
     const inSec = files
       .filter(x => x.id !== draggedId && ((x.doc_category || '') === targetKey))
       .sort((a, b) => ((a.sort_order || 0) - (b.sort_order || 0)) ||
@@ -539,32 +542,25 @@
     let idx = inSec.length;
     if (refId){ const i = inSec.findIndex(x => x.id === refId); if (i >= 0) idx = after ? i + 1 : i; }
     inSec.splice(idx, 0, dragged);
-
-    const updates = [];
-    inSec.forEach((x, i) => {
-      const so = (i + 1) * 10;
-      if (x.id === draggedId){
-        const cat = targetKey || null;
-        updates.push({ id: x.id, body: { sort_order: so, doc_category: cat } });
-        x.sort_order = so; x.doc_category = cat;
-      } else if ((x.sort_order || 0) !== so){
-        updates.push({ id: x.id, body: { sort_order: so } });
-        x.sort_order = so;
-      }
-    });
-
+    // ローカルを先に更新（見た目を即反映）：分類先と並び順
+    dragged.doc_category = targetKey || null;
+    inSec.forEach((x, i) => { x.sort_order = (i + 1) * 10; });
     render();
-    if (!updates.length) return;
+
     try {
-      await Promise.all(updates.map(async u => {
-        const { error } = await sb.from('project_files').update(u.body).eq('id', u.id);
-        if (error) throw error;
-      }));
+      // 章の採番＆ファイル名タグを付け直す（移動先／元の章）
+      await applyChapterNames(files, targetKey);
+      if (sourceKey !== targetKey){
+        await applyChapterNames(files, sourceKey);
+        showMsg($('msg'),
+          `「${sourceKey ? chapterLabel(sourceKey) : '未分類'}」→「${targetKey ? chapterLabel(targetKey) : '未分類'}」へ移動しました。ファイル名のタグも付け直しました。`, 'ok');
+      }
+      await loadFiles(); render();
     } catch (err){
       showMsg($('msg'),
         /doc_category|sort_order|column|schema cache/i.test(err.message || '')
           ? '保存に必要な項目がまだありません。Supabase で phase14_handover.sql を実行してください。'
-          : '並び順を保存できませんでした。' + (err.message || ''), 'err');
+          : '保存できませんでした。' + (err.message || ''), 'err');
     }
   }
 

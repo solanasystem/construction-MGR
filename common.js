@@ -1,6 +1,6 @@
 /* ============================================================
    宗像総合管理システム  共通処理
-   BUILD: common.js v20260905A
+   BUILD: common.js v20260906A
    ============================================================ */
 
 /* ---------- 最新版をすぐ反映する（Service Worker・ネットワーク優先） ----------
@@ -50,6 +50,47 @@ function chapterOptions(sel){
   return HANDOVER_CHAPTERS
     .map(c => `<option value="${c.key}"${c.key === sel ? ' selected' : ''}>${esc(c.label)}</option>`)
     .join('');
+}
+
+/* ---------- 竣工図書：資料名の自動タグ（章名・No.・撮影日）----------
+   章に分類されると、元のファイル名の拡張子の前へ （章名・No.X・撮影日）を付け、
+   後から検索できるようにする。章の移動・並べ替えのたびに古いタグを外して付け直す。
+   DB列は増やさず、タグは元ファイル名から機械的に外して基準名を復元する
+   （タグには必ず "No.数字" が入るので、既存の "(1)" 等とは取り違えない）。
+------------------------------------------------------------------ */
+function docNameParts(name){
+  const m = /^(.*?)(\.[^.\/\\]+)?$/.exec(name || '');
+  return { stem: m[1] || '', ext: m[2] || '' };
+}
+function stripDocTag(name){
+  if (!name) return name || '';
+  const { stem, ext } = docNameParts(name);
+  return stem.replace(/（[^（）]*No\.\d+[^（）]*）\s*$/, '') + ext;
+}
+function buildDocName(baseFileName, chapterKey, no, takenOn){
+  if (!chapterKey) return baseFileName;                 // 未分類は素のファイル名に戻す
+  const { stem, ext } = docNameParts(baseFileName);
+  const tag = [chapterLabel(chapterKey), 'No.' + no, takenOn || ''].filter(Boolean).join('・');
+  return `${stem}（${tag}）${ext}`;
+}
+/* 指定した章の中を並び順で採番し、original_name のタグと sort_order を付け直してDB保存する。
+   files はページが保持する project_files 配列（その場で書き換える）。戻り値＝更新件数。 */
+async function applyChapterNames(files, chapterKey){
+  const bySort = (a, b) => ((a.sort_order || 0) - (b.sort_order || 0)) ||
+                           ((a.taken_on || '') < (b.taken_on || '') ? 1 : -1);
+  const arr = files.filter(x => (x.doc_category || '') === chapterKey).sort(bySort);
+  const ups = [];
+  arr.forEach((x, i) => {
+    const no = i + 1, so = (i + 1) * 10;
+    const base = stripDocTag(x.original_name || '');
+    const nm = chapterKey ? buildDocName(base, chapterKey, no, x.taken_on) : base;
+    const patch = {};
+    if (chapterKey && (x.sort_order || 0) !== so) patch.sort_order = so;   // 採番は章内のみ（未分類は並び替えない）
+    if ((x.original_name || '') !== nm) patch.original_name = nm;          // 未分類は古いタグを外すだけ
+    if (Object.keys(patch).length){ ups.push({ id: x.id, patch }); Object.assign(x, patch); }
+  });
+  if (ups.length) await Promise.all(ups.map(u => sb.from('project_files').update(u.patch).eq('id', u.id)));
+  return ups.length;
 }
 
 /* ---------- 表示の整形 ---------- */

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: files (写真・書類) v20260906B -->
+<!-- BUILD: files (写真・書類) v20260906C -->
 <html lang="ja">
 <head>
 <meta charset="utf-8">
@@ -995,6 +995,8 @@
       (geoOk ? `　うち ${geoOk}件に撮影位置を記録しました。` : '　撮影位置は記録できませんでした。'),
       ng ? 'err' : 'ok');
     await loadFiles();
+    // 取り込み時に図書分類を選んでいたら、その章にファイル名タグ・No.を付ける
+    if (ucat){ try { await applyChapterNames(files, ucat); } catch (_){} render(); }
   });
 
   /* ================= 詳細 ================= */
@@ -1145,16 +1147,34 @@
     });
     // 図書分類：選んでいるか、既に分類が付いている資料のときだけ送る
     // （列が未作成（phase14未実行）のときに保存全体が失敗しないようにする）
-    if ($('f_category').value || editing.doc_category)
-      body.doc_category = $('f_category').value || null;
+    const oldCat = editing.doc_category || '';
+    let newCat = oldCat;
+    if ($('f_category').value || editing.doc_category){
+      newCat = $('f_category').value || '';
+      body.doc_category = newCat || null;
+    }
+    const catChanged = (newCat !== oldCat);
+    if (catChanged && newCat) body.sort_order = 1000000;   // いったん末尾へ→applyChapterNamesで採番＆改名
 
     $('save').disabled = true; $('save').textContent = '保存しています…';
     const { error } = await sb.from('project_files').update(body).eq('id', editing.id);
     $('save').disabled = false; $('save').textContent = '保存する';
 
     if (error){ showMsg($('pmsg'), '保存できませんでした。' + error.message, 'err'); return; }
-    closePanel(); await loadFiles();
-    showMsg($('msg'), '保存しました。', 'ok');
+    await loadFiles();
+    if (catChanged){
+      // 分類先（と元の章）の採番・ファイル名タグを付け直す
+      try {
+        await applyChapterNames(files, newCat);
+        if (oldCat !== newCat) await applyChapterNames(files, oldCat);
+      } catch (_){}
+      render();
+    }
+    closePanel();
+    showMsg($('msg'),
+      (catChanged && newCat) ? `「${chapterLabel(newCat)}」へ分類し、ファイル名にタグを付けました。`
+      : (catChanged && !newCat) ? '未分類に戻し、ファイル名のタグを外しました。'
+      : '保存しました。', 'ok');
   });
 
   /* ================= 削除 ================= */
