@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: schedule (工程表) v20260906C -->
+<!-- BUILD: schedule (工程表) v20260906D -->
 <html lang="ja">
 <head>
 <meta charset="utf-8">
@@ -1982,6 +1982,29 @@ body > header.bar{ flex:0 0 auto; }
   $('oadd').addEventListener('click', () => openOrderEdit(null));
   $('oeclose').addEventListener('click', () => $('oedit').classList.remove('open'));
 
+  // 発注本体を保存する。スキーマに無い列（例: 列が未追加）でも保存を止めず、
+  // 「Could not find the 'X' column」ならその列を落として再試行する（列欠け耐性）。
+  async function saveOrder(bodyIn, id){
+    let b = { ...bodyIn };
+    for (let attempt = 0; attempt < 5; attempt++){
+      let r;
+      if (id){
+        r = await sb.from('phase_orders').update(b).eq('id', id).select('id');
+        if (!r.error && (!r.data || r.data.length === 0))
+          return { error: { message: '更新できませんでした（権限が無いか、対象が見つかりません）。ページを再読み込みしてお試しください。' } };
+        if (!r.error) return { error: null, id };
+      } else {
+        if (!('is_active' in b)) b.is_active = true;
+        r = await sb.from('phase_orders').insert(b).select('id').single();
+        if (!r.error) return { error: null, id: r.data?.id };
+      }
+      const m = /Could not find the '([^']+)' column/.exec(r.error?.message || '');
+      if (m && (m[1] in b)){ delete b[m[1]]; continue; }   // 未知の列を外して再試行
+      return { error: r.error };
+    }
+    return { error: { message: '保存できませんでした。' } };
+  }
+
   $('osave').addEventListener('click', async () => {
     showMsg($('oemsg'), '');
     const t = $('o_title').value.trim();
@@ -2006,51 +2029,13 @@ body > header.bar{ flex:0 0 auto; }
     };
     if (!oediting) body.seq = (orders.length ? Math.max(...orders.map(o => o.seq||0)) : 0) + 10;
     body.total_amount = recalcOiTotal();
-
-    // 発注は必ず実行予算に紐づく（担当者の記憶に頼らない）。台帳品目を選んでいればそれ、
-    // 選んでいなければ副資材・突発として自動で新規計上してから紐づける。
-    let bid = $('o_budget').value || null;
-    if (!bid){
-      const first = collectOiLines()[0] || {};
-      const bstat0 = ($('o_status').value === 'ordered' || $('o_status').value === 'delivered') ? 'ordered' : 'estimate';
-      const ins = await sb.from('phase_budget_items').insert({
-        organization_id: me.organization_id,
-        project_id     : projId,
-        phase_id       : $('o_phase').value || null,
-        category       : ($('o_scope').value === 'internal') ? 'labor' : 'material',
-        cost_stage     : 'extra',
-        item_name      : (first.item_name || t),
-        quantity       : first.quantity ?? null,
-        unit           : first.unit || null,
-        unit_price     : first.unit_price ?? null,
-        budget_amount  : recalcOiTotal() || null,
-        status         : bstat0,
-        seq            : 999999,
-        created_by     : me.id
-      }).select('id').single();
-      if (ins.error){
-        showMsg($('oemsg'), '実行予算への自動計上に失敗しました。' + ins.error.message, 'err');
-        return;
-      }
-      bid = ins.data?.id;
-    }
-    body.budget_item_id = bid;
+    const existingBid = $('o_budget').value || null;
+    if (existingBid) body.budget_item_id = existingBid;   // 既存の台帳品目に紐づけるとき
 
     $('osave').disabled = true; $('osave').textContent = '保存しています…';
-    let error, orderId = oediting?.id;
-    if (oediting){
-      // .select() で「実際に何行更新されたか」を確認する。RLS などで0行なら
-      // エラーが出ないまま保存されず、再度開くと元に戻る（サイレント失敗）ため明示的に検知。
-      const r = await sb.from('phase_orders').update(body).eq('id', oediting.id).select('id');
-      error = r.error;
-      if (!error && (!r.data || r.data.length === 0)){
-        error = { message: '更新できませんでした（権限が無いか、対象が見つかりません）。ページを再読み込みしてお試しください。' };
-      }
-    } else {
-      body.is_active = true;   // 既定値に頼らず明示（既定が無いと再読込で一覧から消える）
-      const r = await sb.from('phase_orders').insert(body).select('id').single();
-      error = r.error; orderId = r.data?.id;
-    }
+    // 発注本体を先に保存（列が1つ足りなくても保存を止めない。予算計上は後にして重複を防ぐ）
+    const res = await saveOrder(body, oediting?.id);
+    let error = res.error, orderId = res.id || oediting?.id;
 
     if (!error && orderId){
       const d = await sb.from('phase_order_items').delete().eq('phase_order_id', orderId);
@@ -2061,6 +2046,33 @@ body > header.bar{ flex:0 0 auto; }
           const r2 = await sb.from('phase_order_items').insert(rows);
           if (r2.error) error = r2.error;
         }
+      }
+    }
+
+    // 実行予算への紐づけは「後追い」。発注は必ず紐づくが、失敗しても発注は残し重複も作らない。
+    let bid = existingBid;
+    if (!error && orderId && !bid){
+      try {
+        const first = collectOiLines()[0] || {};
+        const bstat0 = ($('o_status').value === 'ordered' || $('o_status').value === 'delivered') ? 'ordered' : 'estimate';
+        const ins = await sb.from('phase_budget_items').insert({
+          organization_id: me.organization_id, project_id: projId, phase_id: $('o_phase').value || null,
+          category: ($('o_scope').value === 'internal') ? 'labor' : 'material', cost_stage: 'extra',
+          item_name: (first.item_name || t), quantity: first.quantity ?? null, unit: first.unit || null,
+          unit_price: first.unit_price ?? null, budget_amount: recalcOiTotal() || null,
+          status: bstat0, seq: 999999, created_by: me.id
+        }).select('id').single();
+        if (ins.error) throw ins.error;
+        bid = ins.data.id;
+        const up = await sb.from('phase_orders').update({ budget_item_id: bid }).eq('id', orderId);
+        if (up.error) throw up.error;
+      } catch (e){
+        console.error(e);
+        $('osave').disabled = false; $('osave').textContent = '保存する';
+        $('oedit').classList.remove('open');
+        await loadPhases(); paintOrders(null);
+        showMsg($('omsg'), `発注は保存しました。ただし実行予算への計上に失敗しました（${e.message || ''}）。発注一覧の「未計上」から後で反映できます。`, 'err');
+        return;
       }
     }
 
