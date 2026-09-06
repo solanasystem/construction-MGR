@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: handover (竣工図書) v20260906O -->
+<!-- BUILD: handover (竣工図書) v20260906P -->
 <html lang="ja">
 <head>
 <meta charset="utf-8">
@@ -840,7 +840,7 @@
   const hasFiles = e => !!e.dataTransfer && Array.prototype.includes.call(e.dataTransfer.types || [], 'Files');
   function isAcceptableFile(f){
     return (f.type && (f.type.startsWith('image/') || f.type === 'application/pdf'))
-        || /\.(jpe?g|png|gif|webp|heic|heif|pdf)$/i.test(f.name || '');
+        || /\.(jpe?g|png|gif|webp|heic|heif|pdf|dwg|dxf|jww|jwc|sfc|sxf|p21)$/i.test(f.name || '');
   }
   let uploading = false;
   async function uploadFiles(fileList, docCategory, docSub){
@@ -849,7 +849,7 @@
     if (uploading){ return; }
     const all = [...fileList].filter(isAcceptableFile);
     if (!all.length){
-      if (fileList.length) showMsg($('msg'), '取り込めるのは写真（画像）とPDFだけです。', 'err');
+      if (fileList.length) showMsg($('msg'), '取り込めるのは写真・PDF・図面（DWG/DXF/JWW/SFC）です。', 'err');
       return;
     }
     uploading = true;
