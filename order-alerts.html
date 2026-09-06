@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: order-alerts (材料調達計画表) v20260906D -->
+<!-- BUILD: order-alerts (材料調達計画表) v20260907E -->
 <html lang="ja">
 <head>
 <meta charset="utf-8">
@@ -224,22 +224,25 @@
     history.replaceState(null, '', u);
   }
 
-  // 材料1件の遅れ判定（金額は一切見ない）。工程表の判定と同じ考え方。
+  // 1件の遅れ判定（金額は一切見ない）。費目で「間に合わせる目標日」を切り替える：
+  //  材料＝現地納品予定日(scheduled_delivery_date)／工事(labor)＝対象工程の着工日(start)。
   function classify(x, phase){
-    const dd    = x.scheduled_delivery_date || null;
-    const start = phase ? phase.start_date : null;
-    const lead  = (x.lead_time_days === null || x.lead_time_days === undefined || x.lead_time_days === '')
+    const start   = phase ? phase.start_date : null;
+    const isLabor = (x.category === 'labor');
+    const dd      = x.scheduled_delivery_date || null;
+    const target  = isLabor ? start : dd;   // 工事は着工日を目標に、材料は現地着を目標に
+    const lead    = (x.lead_time_days === null || x.lead_time_days === undefined || x.lead_time_days === '')
                     ? null : Number(x.lead_time_days);
-    const deadline = (dd && lead !== null) ? addDaysYMD(dd, -lead) : null;
+    const deadline = (target && lead !== null) ? addDaysYMD(target, -lead) : null;
     const est = (x.status === 'estimate');
-    // 受注生産・海外輸入は納期が読みにくいので、通常より早めに警告（余裕を上乗せ）
+    // 受注生産・海外輸入は納期が読みにくいので、通常より早めに警告（材料のみ）
     const buf = WARN_DAYS
-      + (x.is_import ? 14 : 0)
-      + (x.procurement_type === 'made_to_order' ? 7 : 0);
+      + (!isLabor && x.is_import ? 14 : 0)
+      + (!isLabor && x.procurement_type === 'made_to_order' ? 7 : 0);
     const warnLimit = addDaysYMD(TODAY, buf);
 
-    // 納品予定が着工日より後 → 発注済みでも間に合わない（最重要）
-    if (dd && start && dd > start)
+    // 材料：現地着が着工日より後 → 発注済みでも間に合わない（工事にはこの概念が無い）
+    if (!isLabor && dd && start && dd > start)
       return { level:'red', rank:0, text:'着工に間に合いません', deadline, dd, start, dlNote:false };
     // 見積中で、発注期限を過ぎている
     if (est && deadline && deadline < TODAY)
@@ -247,11 +250,11 @@
     // 見積中で、発注期限が近い（受注生産・輸入は早めに黄色）
     if (est && deadline && deadline <= warnLimit)
       return { level:'amber', rank:2, text: (buf > WARN_DAYS ? 'まもなく発注期限（早め手配）' : 'まもなく発注期限'), deadline, dd, start, dlNote:true };
-    // 納品予定日が未定 → 間に合うか判断できない
-    if (!dd)
-      return { level:'amber', rank:3, text:'納品予定日が未定', deadline, dd, start, dlNote:false };
+    // 目標日が未定 → 間に合うか判断できない
+    if (!target)
+      return { level:'amber', rank:3, text: (isLabor ? '着工日が未定' : '納品予定日が未定'), deadline, dd, start, dlNote:false };
     // それ以外は余裕あり
-    return { level:'ok', rank:4, text: est ? '発注期限まで余裕あり' : '納品待ち', deadline, dd, start, dlNote:false };
+    return { level:'ok', rank:4, text: est ? '発注期限まで余裕あり' : (isLabor ? '着手待ち' : '納品待ち'), deadline, dd, start, dlNote:false };
   }
 
   function render(){

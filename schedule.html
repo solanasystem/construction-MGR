@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: schedule (工程表) v20260906E -->
+<!-- BUILD: schedule (工程表) v20260907F -->
 <html lang="ja">
 <head>
 <meta charset="utf-8">
@@ -905,14 +905,16 @@ body > header.bar{ flex:0 0 auto; }
     const dt = n2d(d2n(ymd) + n);
     return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`;
   }
-  function orderDeadlineOf(x){
-    if (!x.scheduled_delivery_date || x.lead_time_days === null || x.lead_time_days === undefined || x.lead_time_days === '')
+  // 費目で目標日を切替：材料＝現地納品予定日／工事(labor)＝対象工程の着工日
+  function orderDeadlineOf(x, p){
+    const target = (x.category === 'labor') ? (p ? p.start_date : null) : x.scheduled_delivery_date;
+    if (!target || x.lead_time_days === null || x.lead_time_days === undefined || x.lead_time_days === '')
       return null;
-    return addDaysYMD(x.scheduled_delivery_date, -Number(x.lead_time_days));
+    return addDaysYMD(target, -Number(x.lead_time_days));
   }
-  function orderDeadlineRisk(x){
+  function orderDeadlineRisk(x, p){
     if (x.status !== 'estimate') return false;
-    const dl = orderDeadlineOf(x);
+    const dl = orderDeadlineOf(x, p);
     return !!dl && dl <= addDaysYMD(todayYMD(), ORDER_WARN_DAYS);
   }
 
@@ -926,9 +928,10 @@ body > header.bar{ flex:0 0 auto; }
     const isDone = x => x.status === 'delivered' || x.status === 'inspected';
     const notYet = opMats.filter(x => !isDone(x));
     if (!notYet.length) return { cls:'od-ok', text:'材料：すべて納品済み' };
-    if (notYet.some(orderDeadlineRisk))
+    if (notYet.some(x => orderDeadlineRisk(x, p)))
       return { cls:'od-over', text:'材料：発注期限が近い、または過ぎている項目があります' };
     const risky = p && p.start_date && notYet.some(x => {
+      if (x.category === 'labor') return false;   // 工事は着工日が目標＝上の発注期限リスクで判定済み
       const dd = x.scheduled_delivery_date || x.delivered_on;
       return dd ? dd > p.start_date : true; // 納期未定も着工に間に合うか分からないのでリスク扱い
     });
@@ -939,11 +942,19 @@ body > header.bar{ flex:0 0 auto; }
 
   // 材料1件ごとの納品状況（金額は一切見ない）
   function itemReadiness(x, phaseStartDate){
-    if (x.status === 'delivered' || x.status === 'inspected') return { cls:'od-ok', text:'納品済み' };
-    if (orderDeadlineRisk(x)){
-      const dl = orderDeadlineOf(x);
+    const p = { start_date: phaseStartDate };   // 費目分岐（工事は着工日基準）に渡す
+    const isLabor = (x.category === 'labor');
+    if (x.status === 'delivered' || x.status === 'inspected') return { cls:'od-ok', text: isLabor ? '完了' : '納品済み' };
+    if (orderDeadlineRisk(x, p)){
+      const dl = orderDeadlineOf(x, p);
       const overdue = dl < todayYMD();
       return { cls:'od-over', text:`${overdue ? '発注期限を過ぎています' : '発注期限が近づいています'}（期限 ${fmtDate(dl)}・要発注）` };
+    }
+    if (isLabor){
+      // 工事：着工日が目標。着工日が入っていれば発注期限は上で判定済み。
+      return phaseStartDate
+        ? { cls:'od-pending', text:`着工 ${fmtDate(phaseStartDate)}${x.status === 'ordered' ? '・発注済み' : ''}` }
+        : { cls:'od-over', text:'着工日が未定' };
     }
     const dd = x.scheduled_delivery_date || x.delivered_on;
     if (!dd) return { cls:'od-over', text:'納期未定' };
@@ -1931,6 +1942,7 @@ body > header.bar{ flex:0 0 auto; }
     $('o_category').value = linked ? (linked.category || 'material') : 'material';
     $('o_sdd').value = linked ? (linked.scheduled_delivery_date || '') : '';
     updateMatNote();
+    updateCategoryUI();
     $('o_partner').value= o ? (o.partner_id || '') : '';
     $('o_user').value   = o ? (o.assignee_user_id || '') : '';
     $('o_due').value    = o ? (o.due_date || '') : '';
@@ -1961,7 +1973,28 @@ body > header.bar{ flex:0 0 auto; }
     note.innerHTML = `<i></i>${esc(mat.text)}<span class="chev">▾</span>`;
     note.hidden = false;
   }
-  $('o_phase').addEventListener('change', updateMatNote);
+  $('o_phase').addEventListener('change', () => { updateMatNote(); updateCategoryUI(); });
+
+  // 費目で日付の意味を切り替える。材＝現地納品予定日で判定／工＝対象工程の着工日〜竣工で捉える。
+  function updateCategoryUI(){
+    const isLabor = $('o_category').value === 'labor';
+    const sddRow = $('o_sdd').closest('.row');
+    if (sddRow) sddRow.hidden = isLabor;
+    if (isLabor) $('o_sdd').value = '';   // 工事に「現地納品予定日」は無い
+    const ddLabel = $('o_ddate').closest('.row')?.querySelector('label');
+    if (ddLabel) ddLabel.textContent = isLabor ? '完工日（竣工）' : '納品日';
+    const leadHint = $('o_lead').parentElement.querySelector('span');
+    if (leadHint) leadHint.textContent = isLabor ? '日（契約〜着手の段取り）' : '日（発注〜納品）';
+    // 工事は対象工程の着工日を基準にする旨を発注期限ヒントに出す
+    const dueHint = $('o_due').parentElement.querySelector('span');
+    if (dueHint){
+      const ph = phases.find(p => p.id === $('o_phase').value);
+      dueHint.textContent = isLabor
+        ? (ph && ph.start_date ? `工事の基準は工程の着工日 ${fmtDate(ph.start_date)}。発注期限＝着工日−リードタイム` : '工事は対象工程の着工日を基準に判定します')
+        : '未入力なら「現地納品予定日−リードタイム」で自動判定';
+    }
+  }
+  $('o_category').addEventListener('change', updateCategoryUI);
 
   // バッジをクリック → 紐づく材料を一覧表示。行をクリック → その材料の詳細を開閉
   $('o_matnote').addEventListener('click', () => {
