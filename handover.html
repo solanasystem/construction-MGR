@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: handover (竣工図書) v20260906N -->
+<!-- BUILD: handover (竣工図書) v20260906O -->
 <html lang="ja">
 <head>
 <meta charset="utf-8">
@@ -66,6 +66,8 @@
   .row2 .th.clk:hover{ outline:2px solid var(--safety); outline-offset:-1px; }
   /* 通知バナーは細く（移動確認などは一時的な表示） */
   #msg{ padding:7px 12px; margin-bottom:10px; line-height:1.5; font-size:13px; box-shadow:none; }
+  .paneh .sortsel{ min-height:30px; padding:3px 8px; border:1px solid var(--rule); border-radius:var(--radius-sm);
+    background:#fff; color:var(--ink); font-family:var(--body); font-size:12.5px; cursor:pointer; }
   /* その場プレビュー（1ページ目・別ページへ飛ばない） */
   #qv{ position:fixed; inset:0; z-index:60; display:flex; align-items:center; justify-content:center; }
   #qv .qv-back{ position:absolute; inset:0; background:rgba(15,20,30,.78); }
@@ -331,7 +333,6 @@
   let selected = new Set(), anchorId = null, dragIds = [];   // 複数選択（Ctrl／Shift）
   let curFolder = '';   // 右ペインに表示中の章（''＝未分類/受け皿）
   let curSub = '';      // 章の中のサブフォルダ（''＝章の直下）
-  let qsortDir = 'asc'; // 「名前で並べ替え」の向き（押すたびに反転）
   const bySort = (a, b) => ((a.sort_order || 0) - (b.sort_order || 0)) ||
                            ((a.taken_on || '') < (b.taken_on || '') ? 1 : -1);
   // ファイル名の自然順（1,2,…,10 の順。番号付き同種ファイルがきれいに並ぶ）
@@ -563,7 +564,13 @@
       ? `<b><a href="#" class="crumbup">${cat === '' ? '🗂️' : '📂'} ${esc(catLabel)}</a> › 📁 ${esc(sub)}</b>`
       : `<b>${cat === '' ? '🗂️ ' : '📂 '}${esc(catLabel)}</b>`;
     const mkbtn = (isMgr && cat !== '' && !sub) ? `<button type="button" class="btn ghost sm" id="mksub">＋ フォルダ</button>` : '';
-    const sortbtn = (isMgr && cat !== '' && arr.length >= 2) ? `<button type="button" class="btn ghost sm" id="sortname" title="ファイル名の番号順に自動で並べ替え（もう一度押すと逆順）">名前で並べ替え</button>` : '';
+    const sortbtn = (isMgr && cat !== '' && arr.length >= 2) ? `<select id="sortsel" class="sortsel" title="このフォルダの並べ替え">` +
+        `<option value="" selected>並べ替え…</option>` +
+        `<option value="name:asc">名前（昇順）</option>` +
+        `<option value="name:desc">名前（降順）</option>` +
+        `<option value="date:desc">日付（新しい順）</option>` +
+        `<option value="date:asc">日付（古い順）</option>` +
+      `</select>` : '';
     $('pane').innerHTML =
       `<div class="paneh">${crumb}<span class="pc">${arr.length}件</span>${mkbtn}${sortbtn}` +
       `<span class="panehint">${isMgr ? '選択→フォルダをクリックで移動・ここへD&D取り込み' : ''}</span></div>` +
@@ -591,8 +598,13 @@
       if (!name) return;
       await doMoveMany([...selected], cat, name, null, false);
     });
-    const sbtn = $('sortname');
-    if (sbtn) sbtn.addEventListener('click', () => sortFolderByName());
+    const ssel = $('sortsel');
+    if (ssel) ssel.addEventListener('change', () => {
+      const v = ssel.value; ssel.value = '';   // 選んだら「並べ替え…」に戻す
+      if (!v) return;
+      const [key, dir] = v.split(':');
+      sortFolder(key, dir);
+    });
     $('pane').querySelectorAll('.subfolder').forEach(el => {
       el.addEventListener('click', async () => {
         const s = el.dataset.sub || '';
@@ -1025,6 +1037,12 @@
           .update({ doc_category: targetCat || null, doc_subcategory: targetSub || null }).eq('id', x.id);
         if (error) throw error;
       }));
+      // 並び順(sort_order)も明示的に保存（同じ章内での並び替えは applyChapterNames が
+      // 値一致とみなして書かないため、ここで確実に。これが無いと loadFiles で元に戻る）
+      await Promise.all(inSec.map(async x => {
+        const { error } = await sb.from('project_files').update({ sort_order: x.sort_order }).eq('id', x.id);
+        if (error) throw error;
+      }));
       // 章の採番＆ファイル名タグを付け直す（移動先／元の各章）
       await applyChapterNames(files, targetCat);
       for (const s of sources){ if (s !== targetCat) await applyChapterNames(files, s); }
@@ -1042,21 +1060,33 @@
     }
   }
 
-  /* ---------- 名前で自動整列（同種の番号付きファイルがきれいに並ぶ） ---------- */
-  async function sortFolderByName(){
+  /* ---------- 自動整列（名前 昇順/降順・日付 新しい順/古い順） ---------- */
+  async function sortFolder(key, dir){
     const cat = curFolder || '';
     if (cat === '' || !isMgr) return;
     const arr = files.filter(x => (x.doc_category || '') === cat);
     if (arr.length < 2) return;
-    const dir = qsortDir;
-    arr.sort((a, b) => natCmp(a, b) * (dir === 'desc' ? -1 : 1));
+    const sign = dir === 'desc' ? -1 : 1;
+    const cmp = (key === 'date')
+      ? (a, b) => {   // 日付(撮影日)で。日付なしは向きに関係なく末尾へ、同点は名前順
+          const da = a.taken_on || '', db = b.taken_on || '';
+          if (da && db) return da < db ? -sign : da > db ? sign : natCmp(a, b);
+          if (da) return -1;
+          if (db) return 1;
+          return natCmp(a, b);
+        }
+      : (a, b) => natCmp(a, b) * sign;
+    arr.sort(cmp);
     arr.forEach((x, i) => { x.sort_order = (i + 1) * 10; });
-    qsortDir = dir === 'asc' ? 'desc' : 'asc';   // 次回は逆順
     render();
     try {
-      await applyChapterNames(files, cat);       // sort_order と No. タグを保存
+      // sort_order を明示的に保存（applyChapterNames は値が一致すると書かないため、ここで確実に）
+      await Promise.all(arr.map(x => sb.from('project_files').update({ sort_order: x.sort_order }).eq('id', x.id)));
+      await applyChapterNames(files, cat);       // No. タグを付け直す
       await loadFiles(); render();
-      showMsg($('msg'), `「${chapterLabel(cat)}」を名前${dir === 'asc' ? '昇順' : '降順'}で並べ替えました。`, 'ok');
+      const lbl = (key === 'date') ? `日付（${dir === 'desc' ? '新しい順' : '古い順'}）`
+                                   : `名前（${dir === 'desc' ? '降順' : '昇順'}）`;
+      showMsg($('msg'), `「${chapterLabel(cat)}」を${lbl}で並べ替えました。`, 'ok');
     } catch (err){
       showMsg($('msg'), '並べ替えを保存できませんでした。' + (err.message || ''), 'err');
     }
