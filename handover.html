@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: handover (竣工図書) v20260906Q -->
+<!-- BUILD: handover (竣工図書) v20260906R -->
 <html lang="ja">
 <head>
 <meta charset="utf-8">
@@ -90,9 +90,9 @@
   #qv .qc-m{ font-size:12px; opacity:.85; }
   #qv .qc-open{ margin-left:auto; color:#bfe0ff; text-decoration:underline; }
   .row2 .nm{ min-width:0; }
-  .row2 .nm .t1{ font-family:var(--disp); font-weight:700; font-size:13.5px; line-height:1.4;
+  .row2 .nm .t1{ display:block; max-width:100%; font-family:var(--disp); font-weight:700; font-size:13.5px; line-height:1.4;
                  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .row2 .nm .t2{ font-size:11.5px; color:var(--sub); font-family:var(--mono); line-height:1.5;
+  .row2 .nm .t2{ display:block; max-width:100%; font-size:11.5px; color:var(--sub); font-family:var(--mono); line-height:1.5;
                  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .row2 .mv{ font-size:11px; }
   .row2.sel{ background:#DCE9F7; border-color:var(--ink);
@@ -140,13 +140,18 @@
   .folder.fileover{ outline:2px solid var(--safety); outline-offset:-2px; background:#FBF6EA; }
 
   .pane{ border:1px solid var(--rule); border-radius:var(--radius); background:var(--card);
-         box-shadow:var(--shadow-1); overflow:hidden; min-height:140px; }
+         box-shadow:var(--shadow-1); overflow:hidden; min-height:140px; min-width:0; }
   .pane .paneh{ display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; padding:9px 13px;
                 background:#F1F3EF; border-bottom:1px solid var(--rule-2); }
   .pane .paneh b{ font-family:var(--disp); font-size:14.5px; }
   .pane .paneh .pc{ font-family:var(--mono); font-size:12px; color:var(--sub); }
   .pane .paneh .panehint{ font-size:11.5px; color:var(--sub); margin-left:auto; }
-  .pane .items{ padding:8px; display:flex; flex-direction:column; gap:6px; min-height:70px; }
+  .pane .paneh .sortsel{ width:auto; flex:0 0 auto; min-height:28px; padding:2px 8px; font-size:12px;
+    border:1px solid var(--rule); border-radius:var(--radius-sm); background:#fff; color:var(--ink);
+    font-family:var(--body); cursor:pointer; }
+  .pane .items{ padding:8px; display:flex; flex-direction:column; gap:6px; min-height:70px; min-width:0; overflow-x:hidden; }
+  .row2{ min-width:0; }
+  .row2 .mv{ flex:0 0 auto; }
   .pane.fileover{ outline:2px dashed var(--safety); outline-offset:-3px; background:#FBF9F0; }
   .paneempty{ color:#9AA39C; font-size:13px; text-align:center; padding:24px 8px; }
   /* 章の中のサブフォルダ */
@@ -332,6 +337,7 @@
   let selected = new Set(), anchorId = null, dragIds = [];   // 複数選択（Ctrl／Shift）
   let curFolder = '';   // 右ペインに表示中の章（''＝未分類/受け皿）
   let curSub = '';      // 章の中のサブフォルダ（''＝章の直下）
+  let sortState = {};   // 章ごとに最後に適用した並べ替え（例 'name:asc'）。手動移動で解除
   const bySort = (a, b) => ((a.sort_order || 0) - (b.sort_order || 0)) ||
                            ((a.taken_on || '') < (b.taken_on || '') ? 1 : -1);
   // ファイル名の自然順（1,2,…,10 の順。番号付き同種ファイルがきれいに並ぶ）
@@ -568,12 +574,15 @@
       ? `<b><a href="#" class="crumbup">${cat === '' ? '🗂️' : '📂'} ${esc(catLabel)}</a> › 📁 ${esc(sub)}</b>`
       : `<b>${cat === '' ? '🗂️ ' : '📂 '}${esc(catLabel)}</b>`;
     const mkbtn = (isMgr && cat !== '' && !sub) ? `<button type="button" class="btn ghost sm" id="mksub">＋ フォルダ</button>` : '';
+    const cs = sortState[cat] || '';
+    const sopt = (v, label) => `<option value="${v}"${cs === v ? ' selected' : ''}>${label}</option>`;
     const sortbtn = (isMgr && cat !== '' && arr.length >= 2) ? `<select id="sortsel" class="sortsel" title="このフォルダの並べ替え">` +
-        `<option value="" selected>並べ替え…</option>` +
-        `<option value="name:asc">名前（昇順）</option>` +
-        `<option value="name:desc">名前（降順）</option>` +
-        `<option value="date:desc">日付（新しい順）</option>` +
-        `<option value="date:asc">日付（古い順）</option>` +
+        `<option value=""${cs === '' ? ' selected' : ''}>${cs ? '並び順を変える…' : '並べ替え…'}</option>` +
+        sopt('name:asc', '名前（昇順）') +
+        sopt('name:desc', '名前（降順）') +
+        sopt('date:desc', '日付（新しい順）') +
+        sopt('date:asc', '日付（古い順）') +
+        (cs === 'manual' ? `<option value="manual" selected>手動（ドラッグ）</option>` : '') +
       `</select>` : '';
     $('pane').innerHTML =
       `<div class="paneh">${crumb}<span class="pc">${arr.length}件</span>${mkbtn}${sortbtn}` +
@@ -604,10 +613,10 @@
     });
     const ssel = $('sortsel');
     if (ssel) ssel.addEventListener('change', () => {
-      const v = ssel.value; ssel.value = '';   // 選んだら「並べ替え…」に戻す
-      if (!v) return;
+      const v = ssel.value;
+      if (!v || v === 'manual') return;   // 見出し行や「手動」は動作なし
       const [key, dir] = v.split(':');
-      sortFolder(key, dir);
+      sortFolder(key, dir);   // 適用後は選んだ並べ方がそのまま表示され続ける（証拠）
     });
     $('pane').querySelectorAll('.subfolder').forEach(el => {
       el.addEventListener('click', async () => {
@@ -1032,6 +1041,7 @@
     // ローカルを先に反映：分類先（章・サブ）と並び順
     moved.forEach(x => { x.doc_category = targetCat || null; x.doc_subcategory = targetSub || null; });
     inSec.forEach((x, i) => { x.sort_order = (i + 1) * 10; });
+    sortState[targetCat] = 'manual';   // 手で並べ替えた＝自動整列ではない状態に
     render();
 
     try {
@@ -1082,6 +1092,7 @@
       : (a, b) => natCmp(a, b) * sign;
     arr.sort(cmp);
     arr.forEach((x, i) => { x.sort_order = (i + 1) * 10; });
+    sortState[cat] = key + ':' + dir;   // どの並べ方をしたかを記憶（プルダウンに表示し続ける）
     render();
     try {
       // sort_order を明示的に保存（applyChapterNames は値が一致すると書かないため、ここで確実に）
