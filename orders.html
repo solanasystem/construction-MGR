@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: orders (材料発注) v20260908B -->
+<!-- BUILD: orders (材料発注) v20260908C -->
 <html lang="ja">
 <head>
 <meta charset="utf-8">
@@ -215,12 +215,18 @@
     const PM = pmap(), PT = ptmap(), UM = umap(), PJ = projmap();
     const fstat = $('fstat').value, fscope = $('fscope').value;
 
-    // 発注抜け（未発注）＝予算台帳で見積中(estimate)のまま、発注が紐づいていない材料・外注
-    const orderedBItems = new Set(orders.filter(o=>o.budget_item_id).map(o=>o.budget_item_id));
-    const gaps = budgets.filter(b => b.status === 'estimate' && !orderedBItems.has(b.id) && b.category !== 'other');
+    // このページは「材料の発注」だけ。工事・労務（外注工事）は工程表で管理し、ここには出さない。
+    // 材料か工事かは、発注が紐づく予算台帳の費目 category（material／labor）で判定する。
+    const budgetById = Object.fromEntries(budgets.map(b => [b.id, b]));
+    const isMaterialOrder = o => { const b = budgetById[o.budget_item_id]; return b && b.category === 'material'; };
+    const matOrders = orders.filter(isMaterialOrder);
 
-    // サマリ集計
-    const activeOrders = orders.filter(o => o.status !== 'cancelled');
+    // 発注抜け（未発注）＝予算台帳で見積中(estimate)のまま、発注が紐づいていない「材料」
+    const orderedBItems = new Set(orders.filter(o=>o.budget_item_id).map(o=>o.budget_item_id));
+    const gaps = budgets.filter(b => b.status === 'estimate' && !orderedBItems.has(b.id) && b.category === 'material');
+
+    // サマリ集計（材料の発注のみ）
+    const activeOrders = matOrders.filter(o => o.status !== 'cancelled');
     const nPlanned = activeOrders.filter(o=>o.status==='planned').length;
     const nOrdered = activeOrders.filter(o=>o.status==='ordered').length;
     const nOverdue = activeOrders.filter(o=>o.status==='planned' && o.due_date && d2n(o.due_date) < today).length;
@@ -238,7 +244,7 @@
     if (fstat === 'gap'){
       rows = gaps.map(b => ({ gap:true, b }));
     } else {
-      let os = orders.slice();
+      let os = matOrders.slice();
       if (fstat !== 'all') os = os.filter(o => o.status === fstat);
       if (fscope) os = os.filter(o => (o.scope||'internal') === fscope);
       // 期限の早い順（未定は末尾）、その中で状態
