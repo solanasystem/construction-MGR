@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: permissions (権限マトリクス) v20260908A -->
+<!-- BUILD: permissions (権限マトリクス) v20260908B -->
 <html lang="ja">
 <head>
 <meta charset="utf-8">
@@ -13,24 +13,31 @@
 <link href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&family=Noto+Sans+JP:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="common.css">
 <style>
-  .wrap{ max-width:1240px; padding-bottom:40px; }
+  /* ページは固定、表(.tbox)の中だけをスクロール。列見出しを常に見えるようにする */
+  html, body{ height:100%; }
+  body{ overflow:hidden; display:flex; flex-direction:column; }
+  .bar{ flex:0 0 auto; }
+  .wrap{ width:100%; max-width:1240px; align-self:center; flex:1 1 auto; min-height:0;
+         display:flex; flex-direction:column; overflow:hidden; padding-top:10px; padding-bottom:8px; }
+  .lead, .roles, .legend, .note{ flex:0 0 auto; }
+  .tbox{ flex:1 1 auto; min-height:0; }
   .bar h1 .pgico{ font-size:14px; margin-right:4px; opacity:.92; }
 
   .lead{ color:var(--sub); font-size:12px; line-height:1.5; margin:2px 0 12px; }
 
   /* ===== 5区分の定義カード ===== */
-  .roles{ display:grid; gap:8px; grid-template-columns:repeat(5, 1fr); margin:0 0 14px; }
+  .roles{ display:grid; gap:6px; grid-template-columns:repeat(5, 1fr); margin:0 0 8px; }
   .role{ background:var(--card); border:1px solid var(--rule); border-radius:var(--radius);
-    box-shadow:var(--shadow-1); padding:9px 10px; position:relative; overflow:hidden; }
-  .role .tno{ font-family:var(--mono); font-weight:800; font-size:15px; color:var(--ink-2); line-height:1; }
-  .role .tnm{ display:block; font-weight:700; font-size:13.5px; margin-top:3px; color:var(--ink); }
-  .role .tside{ display:inline-block; font-size:10px; font-weight:700; padding:1px 6px; border-radius:999px; margin-top:5px; }
+    box-shadow:var(--shadow-1); padding:5px 9px; position:relative; overflow:hidden; }
+  .role .tno{ font-family:var(--mono); font-weight:800; font-size:12.5px; color:var(--ink-2); line-height:1; }
+  .role .tnm{ display:inline; font-weight:700; font-size:12.5px; margin-left:5px; color:var(--ink); }
+  .role .tside{ display:inline-block; font-size:9px; font-weight:700; padding:0 6px; border-radius:999px; margin-left:6px; vertical-align:1px; }
   .role .tside.in{ background:#E3EBF3; color:var(--ink-2); }
   .role .tside.ex{ background:#FBF1EF; color:#8C2A1D; }
-  .role .tdesc{ display:block; font-size:11px; color:var(--sub); margin-top:5px; line-height:1.45; }
+  .role .tdesc{ display:block; font-size:10px; color:var(--sub); margin-top:2px; line-height:1.3; }
   .role.me{ border-color:var(--ink-2); box-shadow:0 0 0 2px rgba(37,90,145,.18), var(--shadow-1); }
-  .role.me::after{ content:"今のあなた"; position:absolute; top:0; right:0; font-size:9.5px; font-weight:800;
-    color:#fff; background:var(--ink-2); padding:2px 7px; border-radius:0 0 0 8px; letter-spacing:.02em; }
+  .role.me::after{ content:"今のあなた"; position:absolute; top:0; right:0; font-size:9px; font-weight:800;
+    color:#fff; background:var(--ink-2); padding:1px 6px; border-radius:0 0 0 8px; letter-spacing:.02em; }
 
   /* ===== 凡例 ===== */
   .legend{ display:flex; flex-wrap:wrap; gap:6px 12px; align-items:center; margin:0 0 10px; font-size:11px; color:var(--sub); }
