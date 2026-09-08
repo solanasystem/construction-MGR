@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: orders (材料発注) v20260908C -->
+<!-- BUILD: orders (材工発注) v20260908D -->
 <html lang="ja">
 <head>
 <meta charset="utf-8">
@@ -7,7 +7,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<title>材料発注 ｜ 宗像総合管理システム</title>
+<title>材工発注 ｜ 宗像総合管理システム</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&family=Noto+Sans+JP:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -26,6 +26,12 @@
 
   .ctl{ display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:4px; }
   .ctl select{ width:auto; min-width:140px; max-width:320px; min-height:30px; flex:0 1 auto; }
+  /* 材料発注／工事発注 の切替タブ（このページの主モード） */
+  .modeseg{ display:inline-flex; border:1px solid var(--ink-2); border-radius:999px; overflow:hidden; flex:0 0 auto; }
+  .modeseg button{ border:0; background:var(--card); color:var(--ink-2); font-family:var(--body); font-weight:800;
+    font-size:12.5px; padding:5px 15px; min-height:30px; cursor:pointer; white-space:nowrap; }
+  .modeseg button+button{ border-left:1px solid var(--rule); }
+  .modeseg button.on{ background:linear-gradient(180deg,#275A91,var(--ink) 65%); color:#fff; }
   .ctl .fl-lb{ font-size:10px; font-weight:800; color:var(--ink-2); letter-spacing:.06em;
     padding:3px 8px; background:#EEF1EA; border:1px solid var(--rule-2); border-radius:999px; white-space:nowrap; }
   .fl-help{ font-size:10px; font-weight:700; color:var(--sub); background:transparent;
@@ -116,16 +122,20 @@
 
 <header class="bar">
   <span class="mark" aria-hidden="true"></span>
-  <h1><span class="pgico" aria-hidden="true">🛒</span>材料発注</h1>
+  <h1><span class="pgico" aria-hidden="true">🧾</span>材工発注</h1>
   <div class="who" id="who"></div>
 </header>
 
 <div class="wrap">
   <p class="lead" id="lead" hidden>
-    材料の<b>発注</b>を管理します。まだ発注していない材料（<b>発注抜け＝未発注</b>）を点検し、<b>相見積で原価を決めてから発注</b>します。相見積・原価決定は「相見積・原価決定」、発注の作成・編集は「工程表」から行えます（行をクリックすると該当の発注／材料を工程表で開きます）。発注後の入荷（納品予定）は「材料到着スケジュール」で管理します。
+    外部への発注（<b>材料</b>・<b>工事</b>）を管理します。上のタブで「材料発注」と「工事発注」を切り替えられます。まだ発注していないもの（<b>発注抜け</b>）を点検し、<b>相見積で原価を決めてから発注</b>します。相見積・原価決定は「相見積・原価決定」、発注の作成・編集は「工程表」から行えます。発注後の入荷（納品予定）は「材料到着スケジュール」で管理します。
   </p>
 
   <div class="ctl">
+    <div class="modeseg" id="modeseg" role="tablist">
+      <button type="button" id="m_mat" class="on">材料発注</button>
+      <button type="button" id="m_lab">工事発注</button>
+    </div>
     <span class="fl-lb">絞り込み</span>
     <button class="fl-help" id="helpBtn" type="button">？使い方 ▼</button>
     <select id="fproj"><option value="">すべての工事</option></select>
@@ -178,6 +188,7 @@
   // 工事の記憶（材料調達などと同じ挙動）
   const qs = new URL(location.href).searchParams;
   let projId = qs.get('p') || '';
+  let matmode = (qs.get('m') === 'labor') ? 'labor' : 'material';   // 材料発注(material)／工事発注(labor)
 
   async function loadRefs(){
     const [pj, pt, us] = await Promise.all([
@@ -215,15 +226,14 @@
     const PM = pmap(), PT = ptmap(), UM = umap(), PJ = projmap();
     const fstat = $('fstat').value, fscope = $('fscope').value;
 
-    // このページは「材料の発注」だけ。工事・労務（外注工事）は工程表で管理し、ここには出さない。
-    // 材料か工事かは、発注が紐づく予算台帳の費目 category（material／labor）で判定する。
+    // タブ（材料発注／工事発注）で表示を切り替える。材料か工事かは、発注が紐づく
+    // 予算台帳の費目 category（material／labor）で判定する。
     const budgetById = Object.fromEntries(budgets.map(b => [b.id, b]));
-    const isMaterialOrder = o => { const b = budgetById[o.budget_item_id]; return b && b.category === 'material'; };
-    const matOrders = orders.filter(isMaterialOrder);
+    const matOrders = orders.filter(o => { const b = budgetById[o.budget_item_id]; return b && b.category === matmode; });
 
-    // 発注抜け（未発注）＝予算台帳で見積中(estimate)のまま、発注が紐づいていない「材料」
+    // 発注抜け（未発注）＝予算台帳で見積中(estimate)のまま、発注が紐づいていないもの（現モードの費目）
     const orderedBItems = new Set(orders.filter(o=>o.budget_item_id).map(o=>o.budget_item_id));
-    const gaps = budgets.filter(b => b.status === 'estimate' && !orderedBItems.has(b.id) && b.category === 'material');
+    const gaps = budgets.filter(b => b.status === 'estimate' && !orderedBItems.has(b.id) && b.category === matmode);
 
     // サマリ集計（材料の発注のみ）
     const activeOrders = matOrders.filter(o => o.status !== 'cancelled');
@@ -256,7 +266,7 @@
     }
 
     if (!rows.length){
-      $('otable').innerHTML = `<div class="empty"><b>${fstat==='gap'?'発注抜けはありません':'発注がありません'}</b>${fstat==='gap'?'予算台帳の材料はすべて発注に紐づいています。':'工程表から発注を作成すると、ここに一覧されます。'}</div>`;
+      $('otable').innerHTML = `<div class="empty"><b>${fstat==='gap'?'発注抜けはありません':'発注がありません'}</b>${fstat==='gap'?'予算台帳の項目はすべて発注に紐づいています。':'工程表から発注を作成すると、ここに一覧されます。'}</div>`;
       return;
     }
 
@@ -314,6 +324,22 @@
   });
   $('fstat').addEventListener('change', render);
   $('fscope').addEventListener('change', render);
+
+  // 材料発注／工事発注 の切替
+  function setMode(m){
+    matmode = m;
+    $('m_mat').classList.toggle('on', m === 'material');
+    $('m_lab').classList.toggle('on', m === 'labor');
+    const u = new URL(location.href); m === 'labor' ? u.searchParams.set('m','labor') : u.searchParams.delete('m');
+    history.replaceState(null, '', u);
+    render();
+  }
+  $('m_mat').addEventListener('click', () => setMode('material'));
+  $('m_lab').addEventListener('click', () => setMode('labor'));
+
+  // 初期タブの表示を（?m=labor のときに）合わせる
+  $('m_mat').classList.toggle('on', matmode === 'material');
+  $('m_lab').classList.toggle('on', matmode === 'labor');
 
   await loadRefs();
   $('newbtn').href = 'schedule.html?panel=orders' + (projId?`&p=${projId}`:'');
