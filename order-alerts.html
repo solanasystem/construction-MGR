@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: order-alerts (材料到着スケジュール) v20260911A -->
+<!-- BUILD: order-alerts (材料到着スケジュール) v20260911B -->
 <html lang="ja">
 <head>
 <meta charset="utf-8">
@@ -52,6 +52,8 @@
   .bar h1 .pgico{ font-size:14px; margin-right:4px; opacity:.92; }
 
   .count{ margin:2px 0 4px; font-size:10.5px; color:var(--sub); }
+  .count .lnk{ background:none; border:0; color:var(--ink-2); font-weight:800; cursor:pointer; text-decoration:underline; font-size:inherit; padding:0; }
+  .empty .lnk{ background:none; border:0; color:var(--ink-2); font-weight:800; cursor:pointer; text-decoration:underline; font-size:14px; padding:0; }
 
   .sumgrid{ display:grid; gap:5px; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); margin-bottom:4px; }
   /* サマリ（至急/注意/未納品）はフィルタ行の右側の余白に横並び。3枚を必ず1行に */
@@ -246,7 +248,7 @@
       <span><input id="e_lead" type="number" min="0" step="1" placeholder="0"><span id="e_leadhint" style="font-size:12px;color:var(--sub)">日</span></span></div>
     <div class="ebasis" id="e_basis"></div>
     <div class="efoot">
-      <a class="btn ghost sm" id="golink" href="#">この材料を材工発注で扱う →</a>
+      <a class="btn ghost sm" id="golink" href="#">工程表でこの材料の位置を見る →</a>
       <span style="flex:1 1 auto"></span>
       <button class="btn ghost sm" id="ecancel">やめる</button>
       <button class="btn" id="esave">保存する</button>
@@ -457,10 +459,24 @@
         <span class="v">${totalN}<small>件</small></span></div>
     `;
 
-    $('count').innerHTML = `${rows.length} 件を表示 ・ ↕ 並べ替え：<b style="color:var(--ink-2)">${SKN[sortKey]||'アラート'}（${sortDir===1?'昇順':'降順'}）</b> <span style="color:var(--sub)">— 列見出しをタップで変更</span>`;
+    // A：絞り込みで“見えていない”件数を明示（黙って消えたように見せない）＋ワンタップ切替
+    const sortInfo = `↕ 並べ替え：<b style="color:var(--ink-2)">${SKN[sortKey]||'アラート'}（${sortDir===1?'昇順':'降順'}）</b> <span style="color:var(--sub)">— 列見出しをタップ</span>`;
+    let head = `${rows.length} 件を表示`;
+    if (fs === 'risk'){
+      const okHidden = Math.max(0, totalN - rows.length);
+      head = `要対応 <b style="color:var(--ink-2)">${rows.length}</b> 件`;
+      if (okHidden > 0) head += ` ・ 納品待ち等（対応不要）<b>${okHidden}</b>件は <button id="showAllBtn" class="lnk" type="button">未納品すべてを表示 →</button>`;
+    } else if (fs === 'unset'){
+      head = `未入力 <b style="color:var(--ink-2)">${rows.length}</b> 件`;
+    }
+    $('count').innerHTML = `${head} ・ ${sortInfo}`;
+    { const b = document.getElementById('showAllBtn'); if (b) b.addEventListener('click', () => { $('fshow').value = 'all'; render(); }); }
 
     if (!rows.length){
-      $('atable').innerHTML = `<div class="empty"><b>${fs === 'risk' ? '発注・納品の遅れの心配はありません' : '対象の材料がありません'}</b>${fs === 'risk' ? '発注期限が近い・過ぎている材料や、着工に間に合わない材料が出るとここに並びます。' : '絞り込みを変えてお試しください。'}</div>`;
+      const seeAll = (fs !== 'all' && totalN > 0)
+        ? ` <button id="emptyAllBtn" class="lnk" type="button">未納品すべて（${totalN}件）を表示 →</button>` : '';
+      $('atable').innerHTML = `<div class="empty"><b>${fs === 'risk' ? '要対応の材料はありません（間に合っています）' : '対象の材料がありません'}</b>${fs === 'risk' ? '発注期限が近い・過ぎている、着工に間に合わない材料が出るとここに並びます。納品予定日を入れて“間に合う”状態にすると、ここから外れて下の「未納品すべて」に移ります。' : '絞り込みを変えてお試しください。'}${seeAll}</div>`;
+      { const b = document.getElementById('emptyAllBtn'); if (b) b.addEventListener('click', () => { $('fshow').value = 'all'; render(); }); }
       return;
     }
 
@@ -574,7 +590,7 @@
     }
     closeEdit();
     render();
-    showMsg($('msg'), '保存しました。', 'ok');
+    showMsg($('msg'), '保存しました。' + ($('fshow').value === 'risk' ? '（間に合う状態になった材料は要対応から外れ、「未納品すべて」で確認できます）' : ''), 'ok');
   });
 
   $('fproj').addEventListener('change', () => { syncProjUrl(); render(); });
